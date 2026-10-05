@@ -22,8 +22,8 @@ export default function App() {
   useEffect(() => {
     const c = cRef.current!
     const resize = () => {
-      const dpr = devicePixelRatio || 1
-      const w = innerWidth, h = innerHeight
+      const dpr = window.devicePixelRatio || 1
+      const w = window.innerWidth, h = window.innerHeight
       c.width = w * dpr; c.height = h * dpr
       c.style.width = w + 'px'; c.style.height = h + 'px'
       const ctx = c.getContext('2d')!
@@ -33,7 +33,7 @@ export default function App() {
       posRef.current = { x: w/2, y: h/2 }
     }
     resize()
-    addEventListener('resize', resize)
+    window.addEventListener('resize', resize)
     const loop = () => {
       draw()
       if (on) mic()
@@ -41,7 +41,7 @@ export default function App() {
     }
     rafRef.current = requestAnimationFrame(loop)
     return () => {
-      removeEventListener('resize', resize)
+      window.removeEventListener('resize', resize)
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
       stop()
     }
@@ -52,8 +52,9 @@ export default function App() {
       setErr('')
       const s = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, video: false })
       streamRef.current = s
-      const ac = new (AudioContext || (window as any).webkitAudioContext)()
+      const ac = new (window.AudioContext || (window as any).webkitAudioContext)()
       acRef.current = ac
+      await ac.resume()
       const src = ac.createMediaStreamSource(s)
       const an = ac.createAnalyser()
       an.fftSize = 256
@@ -82,7 +83,7 @@ export default function App() {
     let rms = 0
     for (let i=0;i<td.length;i++) { const v=(td[i]-128)/128; rms+=v*v }
     rms = Math.sqrt(rms/td.length)
-    const amp = Math.min(1.2, rms*3.2)
+    const amp = Math.min(1.4, rms*3.8)
     setLvl(amp)
     an.getByteFrequencyData(fd)
     let low=0,mid=0,high=0
@@ -94,44 +95,44 @@ export default function App() {
 
     const c=cRef.current!
     const w=c.clientWidth,h=c.clientHeight
-    const tx = w/2 + (mid-128)/128*w*0.3
-    const ty = h/2 + (high-128)/128*h*0.25
+    const tx = w/2 + (mid-128)/128*w*0.36
+    const ty = h/2 + (high-128)/128*h*0.3
     const dx=tx-posRef.current.x, dy=ty-posRef.current.y
-    posRef.current.x += dx*0.24; posRef.current.y += dy*0.24
-    hueRef.current += amp*28 + low*0.12
+    posRef.current.x += dx*0.28; posRef.current.y += dy*0.28
+    hueRef.current += amp*36 + low*0.16
 
-    if (amp>0.09) {
+    if (amp>0.06) {
       const trail: Trail = {
-        pts: Array(9).fill(0).map((_,i)=>({
-          x: posRef.current.x + Math.cos(i)*amp*14*(Math.random()*0.4+0.8),
-          y: posRef.current.y + Math.sin(i)*amp*14*(Math.random()*0.4+0.8)
-        })),
-        color: `hsl(${((hueRef.current%360)+360)%360}, ${90-amp*20}%, ${62+amp*16}%)`,
-        w: 2 + amp*18,
+        pts: Array(8).fill(0).map((_,i)=>{
+          const a=i*Math.PI*2/8 + Date.now()*0.0004
+          return { x: posRef.current.x + Math.cos(a)*amp*16, y: posRef.current.y + Math.sin(a)*amp*16 }
+        }),
+        color: `hsl(${((hueRef.current%360)+360)%360}, ${92-amp*22}%, ${64+amp*18}%)`,
+        w: 2 + amp*20,
         born: performance.now(),
-        life: 700 + amp*600
+        life: 800 + amp*700
       }
       trailsRef.current.push(trail)
-      if (trailsRef.current.length>400) trailsRef.current=trailsRef.current.slice(-320)
+      if (trailsRef.current.length>380) trailsRef.current=trailsRef.current.slice(-300)
     }
   }
 
   function draw() {
     const ctx=ctxRef.current, c=cRef.current
     if (!ctx||!c) return
-    ctx.fillStyle='rgba(4,4,7,0.18)'
+    ctx.fillStyle='rgba(3,3,6,0.22)'
     ctx.fillRect(0,0,c.clientWidth,c.clientHeight)
     const now=performance.now()
     trailsRef.current = trailsRef.current.filter(t=>now-t.born<t.life)
     ctx.globalCompositeOperation='lighter'
     for (const t of trailsRef.current) {
-      const a=(1-(now-t.born)/t.life)*0.98
+      const a=(1-(now-t.born)/t.life)*1.0
       if (a<=0) continue
       ctx.save()
       ctx.globalAlpha=a
       ctx.strokeStyle=t.color
       ctx.lineWidth=t.w*(1-(now-t.born)/t.life)
-      ctx.shadowBlur=t.w*2.4
+      ctx.shadowBlur=t.w*2.6
       ctx.shadowColor=t.color
       ctx.beginPath()
       ctx.moveTo(t.pts[0].x,t.pts[0].y)
@@ -147,21 +148,21 @@ export default function App() {
   }
 
   return (
-    <div style={{position:'fixed',inset:0,background:'#040407'}}>
+    <div style={{position:'fixed',inset:0,background:'#030306'}}>
       <canvas ref={cRef}/>
       <div style={{position:'absolute',top:16,left:0,right:0,textAlign:'center',color:'#fff',pointerEvents:'none'}}>
-        <h1 style={{margin:0,fontSize:'clamp(24px,5vw,48px)',letterSpacing:'-.04em',fontWeight:800}}>Soundbrush</h1>
-        <p style={{margin:'4px 0 0',opacity:.6,fontSize:'clamp(12px,1.6vw,13px)'}}>Hum, speak, or make noise — watch it paint</p>
+        <h1 style={{margin:0,fontSize:'clamp(22px,5vw,46px)',letterSpacing:'-.04em',fontWeight:800}}>Soundbrush</h1>
+        <p style={{margin:'4px 0 0',opacity:.6,fontSize:'clamp(11px,1.5vw,12px)'}}>Click Start. Hum, talk, clap — it paints live.</p>
         <div style={{marginTop:10,pointerEvents:'auto',display:'flex',gap:10,justifyContent:'center'}}>
-          <button onClick={on?stop:start} style={btn}>{on?'Stop':'Start'}</button>
+          <button onClick={on?stop:start} style={btn}>{on?'Stop':'Start mic'}</button>
           <button onClick={()=>trailsRef.current=[]} style={btn}>Clear</button>
         </div>
-        {err&&<div style={{color:'#ff4d4d',marginTop:8,fontSize:12}}>{err}</div>}
-        {on&&<div style={{width:'min(360px,70vw)',height:4,borderRadius:999,background:'rgba(255,255,255,.08)',margin:'10px auto',overflow:'hidden'}}>
-          <div style={{height:'100%',width:`${Math.min(100,lvl*100)}%`,background:'linear-gradient(90deg,#7fa9ff,#ffc9de)'}}/>
+        {err&&<div style={{color:'#ff4d4d',marginTop:8,fontSize:11}}>{err}</div>}
+        {on&&<div style={{width:'min(340px,68vw)',height:3,borderRadius:999,background:'rgba(255,255,255,.1)',margin:'10px auto',overflow:'hidden'}}>
+          <div style={{height:'100%',width:`${Math.min(100,lvl*100)}%`,background:'linear-gradient(90deg,#7fa9ff,#ffc9de,#7cffd6)'}}/>
         </div>}
       </div>
     </div>
   )
 }
-function btn(s:any){return{border:'1px solid rgba(255,255,255,.16)',background:'linear-gradient(180deg,rgba(255,255,255,.1),transparent)',color:'#fff',padding:'8px 16px',borderRadius:999,fontWeight:600,backdropFilter:'blur(6px)'}}
+function btn(s:any){return{border:'1px solid rgba(255,255,255,.18)',background:'linear-gradient(180deg,rgba(255,255,255,.12),transparent)',color:'#fff',padding:'8px 14px',borderRadius:999,fontWeight:700,fontSize:12,backdropFilter:'blur(8px)',WebkitBackdropFilter:'blur(8px)'}}
