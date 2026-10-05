@@ -1,334 +1,212 @@
 import { useEffect, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 
-type BrushCmd = {
-  color: string
-  shape: string
-  size: number
-  opacity: number
-  rotation: number
-  velocity: number
-  count: number
-  text: string
-}
-
-type Stroke = {
-  id: number
-  points: Array<{ x: number; y: number }>
-  color: string
-  size: number
-  opacity: number
-  vel: number
-  rot: number
-  shape: string
-  birth: number
-  life: number
-  trail: boolean
-}
+type Vec = { x: number; y: number }
+type Path = { pts: Vec[]; color: string; size: number; life: number; born: number }
 
 const API_BASE = import.meta.env.VITE_API_BASE || ''
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null)
-  const strokesRef = useRef<Stroke[]>([])
+  const pathsRef = useRef<Path[]>([])
+  const streamRef = useRef<MediaStream | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const analyserRef = useRef<AnalyserNode | null>(null)
+  const dataRef = useRef<Uint8Array | null>(null)
   const rafRef = useRef<number | null>(null)
-  const idRef = useRef(0)
+  const timeRef = useRef(0)
+  const brushPosRef = useRef<Vec>({ x: 0, y: 0 })
+  const velRef = useRef<number>(0)
+  const hueRef = useRef<number>(200)
   const [listening, setListening] = useState(false)
-  const [transcript, setTranscript] = useState('')
-  const [interim, setInterim] = useState('')
-  const [history, setHistory] = useState<string[]>([])
   const [error, setError] = useState('')
-  const recRef = useRef<any>(null)
-  const lastFinalRef = useRef('')
+  const [level, setLevel] = useState(0)
+  const [note, setNote] = useState('')
 
   useEffect(() => {
     const c = canvasRef.current
     if (!c) return
     const dpr = window.devicePixelRatio || 1
-    const set = () => {
-      const w = Math.min(window.innerWidth - 20, 1400)
-      const h = Math.min(window.innerHeight - 360, 800)
+    const resize = () => {
+      const w = window.innerWidth
+      const h = window.innerHeight
       c.width = w * dpr
       c.height = h * dpr
       c.style.width = w + 'px'
       c.style.height = h + 'px'
       const ctx = c.getContext('2d')
-      if (ctx) {
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-        ctx.lineCap = 'round'
-        ctx.lineJoin = 'round'
-      }
+      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      brushPosRef.current = { x: w / 2, y: h / 2 }
     }
-    set()
-    const loop = () => {
+    resize()
+    window.addEventListener('resize', resize)
+    const loop = (t: number) => {
+      timeRef.current = t
       draw()
+      if (listening) updateFromMic()
       rafRef.current = requestAnimationFrame(loop)
     }
     rafRef.current = requestAnimationFrame(loop)
-    window.addEventListener('resize', set)
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      window.removeEventListener('resize', set)
+      window.removeEventListener('resize', resize)
+      stopMic()
     }
-  }, [])
+  }, [listening])
 
-  function strokePath(cmd: BrushCmd): Array<{ x: number; y: number }> {
-    const c = canvasRef.current
-    if (!c) return []
-    const w = c.clientWidth
-    const h = c.clientHeight
-    const cx = w * (0.5 + (Math.random() - 0.5) * 0.16)
-    const cy = h * (0.5 + (Math.random() - 0.5) * 0.12)
-    const len = (80 + Math.random() * 160) * (cmd.velocity || 1)
-    const bend = (0.25 + Math.random() * 0.45) * (cmd.velocity >= 1 ? 1.6 : 0.9)
-    switch (cmd.shape) {
-      case 'line':
-        return [
-          { x: cx - len * 0.6, y: cy },
-          { x: cx + len * 0.6, y: cy },
-        ]
-      case 'swipe':
-        return [
-          { x: cx - len * 0.7, y: cy - len * 0.25 },
-          { x: cx + len * 0.3, y: cy + len * 0.18 },
-          { x: cx + len * 0.8, y: cy - len * 0.12 },
-        ]
-      case 'wave': {
-        const pts = []
-        for (let i = 0; i <= 9; i++) {
-          const t = i / 9
-          const x = cx - len * 0.6 + t * len * 1.2
-          const y = cy + Math.sin(t * Math.PI * 2 + Math.random() * 0.4) * (len * 0.18)
-          pts.push({ x, y })
-        }
-        return pts
-      }
-      case 'zigzag': {
-        const pts = []
-        let x = cx - len * 0.6, y = cy
-        pts.push({ x, y })
-        for (let i = 1; i <= 7; i++) {
-          x += len * 0.16
-          y += (i % 2 === 1 ? -len * 0.12 : len * 0.12)
-          pts.push({ x, y })
-        }
-        return pts
-      }
-      case 'spiral': {
-        const pts = []
-        for (let i = 0; i <= 24; i++) {
-          const ang = (i / 24) * Math.PI * 3
-          const r = (i / 24) * len * 0.5
-          pts.push({ x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r })
-        }
-        return pts
-      }
-      case 'circle': {
-        const pts = []
-        const r = len * 0.32
-        for (let i = 0; i <= 16; i++) {
-          const ang = (i / 16) * Math.PI * 2
-          pts.push({ x: cx + Math.cos(ang) * r, y: cy + Math.sin(ang) * r })
-        }
-        return pts
-      }
-      case 'dots': {
-        const pts = []
-        for (let i = 0; i <= 5; i++) {
-          pts.push({ x: cx + (i - 2.5) * (len * 0.16), y: cy + (Math.random() - 0.5) * len * 0.12 })
-        }
-        return pts
-      }
-      default: {
-        const pts = []
-        pts.push({ x: cx - len * 0.6, y: cy + len * 0.15 })
-        pts.push({ x: cx - len * 0.25, y: cy - len * bend })
-        pts.push({ x: cx + len * 0.25, y: cy + len * bend * 0.6 })
-        pts.push({ x: cx + len * 0.6, y: cy - len * 0.2 })
-        return pts
-      }
+  function hsl(h: number, s: number, l: number) {
+    return `hsl(${(h % 360 + 360) % 360}, ${s}%, ${l}%)`
+  }
+
+  async function startMic() {
+    try {
+      setError('')
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+      streamRef.current = stream
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)()
+      audioCtxRef.current = ctx
+      const src = ctx.createMediaStreamSource(stream)
+      const analyser = ctx.createAnalyser()
+      analyser.fftSize = 512
+      analyser.smoothingTimeConstant = 0.85
+      src.connect(analyser)
+      analyserRef.current = analyser
+      dataRef.current = new Uint8Array(analyser.frequencyBinCount)
+      setListening(true)
+    } catch (e: any) {
+      setError(e.message || 'Mic access denied')
     }
   }
 
-  function spawn(cmd: BrushCmd) {
-    const pts = strokePath(cmd)
-    if (pts.length < 2) return
-    const now = performance.now()
-    for (let i = 0; i < Math.max(1, cmd.count); i++) {
-      const jitter = i > 0 ? 0.12 : 0
-      const cpts = pts.map(p => ({ x: p.x + (Math.random() - 0.5) * len(p, pts) * jitter, y: p.y + (Math.random() - 0.5) * len(p, pts) * jitter }))
-      strokesRef.current.push({
-        id: ++idRef.current,
-        points: cpts,
-        color: cmd.color,
-        size: (cmd.size || 9) * (0.9 + Math.random() * 0.25),
-        opacity: Math.min(1, cmd.opacity || 0.98),
-        vel: cmd.velocity || 1,
-        rot: cmd.rotation || 0,
-        shape: cmd.shape,
-        birth: now,
-        life: 1400 + Math.random() * 900,
-        trail: true,
-      })
-    }
-    if (strokesRef.current.length > 900) strokesRef.current = strokesRef.current.slice(-700)
+  function stopMic() {
+    if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop())
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') audioCtxRef.current.close()
+    streamRef.current = null
+    audioCtxRef.current = null
+    analyserRef.current = null
+    dataRef.current = null
+    setListening(false)
+    setLevel(0)
   }
 
-  function len(p: any, pts: any[]): number {
-    const idx = pts.indexOf(p)
-    if (idx <= 0) return 40
-    const a = pts[idx - 1], b = p
-    return Math.hypot(b.x - a.x, b.y - a.y)
+  function updateFromMic() {
+    const analyser = analyserRef.current
+    const data = dataRef.current
+    if (!analyser || !data) return
+    analyser.getByteTimeDomainData(data)
+    let sum = 0
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128
+      sum += v * v
+    }
+    const rms = Math.sqrt(sum / data.length)
+    const amp = Math.min(1, rms * 2.6)
+    setLevel(amp)
+
+    analyser.getByteFrequencyData(data)
+    let low = 0, mid = 0, high = 0
+    const len = data.length
+    for (let i = 0; i < len * 0.15; i++) low += data[i]
+    for (let i = Math.floor(len * 0.15); i < len * 0.5; i++) mid += data[i]
+    for (let i = Math.floor(len * 0.5); i < len; i++) high += data[i]
+    low /= len * 0.15; mid /= len * 0.35; high /= len * 0.5
+
+    const c = canvasRef.current!
+    const w = c.clientWidth, h = c.clientHeight
+    const nx = w / 2 + (mid - 128) / 128 * w * 0.22
+    const ny = h / 2 + (high - 128) / 128 * h * 0.16
+    const dx = nx - brushPosRef.current.x
+    const dy = ny - brushPosRef.current.y
+    const v = Math.min(1.6, Math.hypot(dx, dy) * 0.01 + amp * 0.8)
+    velRef.current = v
+
+    brushPosRef.current.x += dx * 0.18
+    brushPosRef.current.y += dy * 0.18
+
+    hueRef.current += amp * 14 + low * 0.08
+
+    if (amp > 0.08 || v > 0.22) {
+      const path: Path = {
+        pts: [{ x: brushPosRef.current.x, y: brushPosRef.current.y }],
+        color: hsl(hueRef.current, 85 - amp * 25, 58 + amp * 18),
+        size: 2 + amp * 16 + v * 8,
+        life: 900 + amp * 700,
+        born: performance.now(),
+      }
+      for (let i = 0; i < 6; i++) {
+        const ang = (Math.PI * 2 * i) / 6 + timeRef.current * 0.001
+        path.pts.push({
+          x: brushPosRef.current.x + Math.cos(ang) * (amp * 14 + v * 6),
+          y: brushPosRef.current.y + Math.sin(ang) * (amp * 14 + v * 6),
+        })
+      }
+      pathsRef.current.push(path)
+    }
+
+    if (pathsRef.current.length > 520) pathsRef.current = pathsRef.current.slice(-420)
   }
 
   function draw() {
     const ctx = ctxRef.current
     const c = canvasRef.current
     if (!ctx || !c) return
-    ctx.fillStyle = 'rgba(8,8,10,0.12)'
+    ctx.fillStyle = 'rgba(6,6,9,0.16)'
     ctx.fillRect(0, 0, c.clientWidth, c.clientHeight)
     const now = performance.now()
-    strokesRef.current = strokesRef.current.filter(s => now - s.birth < s.life + 200)
-    for (const s of strokesRef.current) {
-      const age = now - s.birth
-      const t = Math.min(1, age / s.life)
-      const alpha = s.opacity * (1 - t) * (0.9 + Math.sin(age * 0.002) * 0.1)
+    pathsRef.current = pathsRef.current.filter(p => now - p.born < p.life)
+    ctx.globalCompositeOperation = 'screen'
+    for (const p of pathsRef.current) {
+      const t = (now - p.born) / p.life
+      const alpha = (1 - t) * 0.95
+      if (alpha <= 0) continue
       ctx.save()
-      ctx.globalCompositeOperation = 'screen'
-      ctx.globalAlpha = Math.max(0, alpha)
-      ctx.strokeStyle = s.color
-      ctx.lineWidth = s.size * (1 - t * 0.25)
-      ctx.shadowBlur = s.size * 1.8
-      ctx.shadowColor = s.color + 'aa'
-      if (s.points.length === 2) {
-        const [a, b] = s.points
-        ctx.beginPath()
-        ctx.moveTo(a.x, a.y)
-        ctx.lineTo(b.x, b.y)
-        ctx.stroke()
-      } else if (s.points.length >= 3) {
-        ctx.beginPath()
-        ctx.moveTo(s.points[0].x, s.points[0].y)
-        for (let i = 1; i < s.points.length - 1; i++) {
-          const p = s.points[i]
-          const n = s.points[i + 1]
-          const cx = (p.x + n.x) / 2
-          const cy = (p.y + n.y) / 2
-          ctx.quadraticCurveTo(p.x, p.y, cx, cy)
+      ctx.globalAlpha = alpha
+      ctx.strokeStyle = p.color
+      ctx.lineWidth = p.size * (1 - t * 0.6)
+      ctx.shadowBlur = p.size * 2.2
+      ctx.shadowColor = p.color + 'bb'
+      ctx.beginPath()
+      if (p.pts.length >= 2) {
+        ctx.moveTo(p.pts[0].x, p.pts[0].y)
+        for (let i = 1; i < p.pts.length; i++) {
+          const a = p.pts[i - 1], b = p.pts[i]
+          const cx = (a.x + b.x) / 2
+          const cy = (a.y + b.y) / 2
+          ctx.quadraticCurveTo(a.x, a.y, cx, cy)
         }
-        ctx.stroke()
-      } else if (s.points.length === 1) {
-        const p = s.points[0]
-        ctx.beginPath()
-        ctx.arc(p.x, p.y, s.size * 0.5, 0, Math.PI * 2)
-        ctx.stroke()
       }
+      ctx.stroke()
       ctx.restore()
     }
-  }
-
-  async function parse(text: string): Promise<BrushCmd | null> {
-    try {
-      const res = await fetch(`${API_BASE}/api/parse`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      })
-      if (!res.ok) return null
-      return await res.json()
-    } catch {
-      return null
-    }
-  }
-
-  function start() {
-    setError('')
-    const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition
-    if (!SR) {
-      setError('SpeechRecognition not supported in this browser (Chrome/Edge recommended)')
-      return
-    }
-    const rec = new SR()
-    rec.continuous = true
-    rec.interimResults = true
-    rec.lang = 'en-US'
-    rec.onresult = async (e: any) => {
-      let interim = '', final = ''
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i]
-        if (r.isFinal) final += r[0].transcript
-        else interim += r[0].transcript
-      }
-      setInterim(interim.trim())
-      if (final.trim() && final.trim() !== lastFinalRef.current) {
-        lastFinalRef.current = final.trim()
-        const t = final.trim()
-        setTranscript(t)
-        setHistory(h => [t, ...h].slice(0, 5))
-        const cmd = await parse(t)
-        if (cmd) spawn(cmd)
-      }
-    }
-    rec.onerror = (e: any) => {
-      setError(e.error || 'recognition error')
-      setListening(false)
-    }
-    rec.onend = () => {
-      if (listening) { try { rec.start() } catch {} }
-    }
-    rec.start()
-    recRef.current = rec
-    setListening(true)
-  }
-
-  function stop() {
-    if (recRef.current) recRef.current.stop()
-    setListening(false)
-    setInterim('')
-  }
-
-  function clear() {
-    strokesRef.current = []
-    setTranscript('')
-    setInterim('')
-    setHistory([])
-    lastFinalRef.current = ''
+    ctx.globalCompositeOperation = 'source-over'
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'radial-gradient(1600px 900px at 50% 10%, #15151a, #08080a)', color: '#f7f7f7', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '26px 12px' }}>
-      <motion.h1 initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }} style={{ margin: 0, fontSize: 'clamp(30px,6vw,60px)', letterSpacing: '-0.035em', fontWeight: 800 }}>
-        Voicebrush
-      </motion.h1>
-      <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.12 }} style={{ margin: 0, color: 'rgba(247,247,247,0.56)', textAlign: 'center' }}>
-        Speak. It paints with intent.
-      </motion.p>
-      <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
-        <button onClick={start} disabled={listening} style={btn(listening)}>Start</button>
-        <button onClick={stop} disabled={!listening} style={btn(!listening)}>Stop</button>
-        <button onClick={clear} style={btn(false)}>Clear</button>
-      </motion.div>
-      <AnimatePresence>
-        {error && <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} style={{ color: '#ff6b6b', fontSize: 13 }}>{error}</motion.div>}
-      </AnimatePresence>
-      <AnimatePresence>
-        {(transcript || interim) && (
-          <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} style={{ color: 'rgba(247,247,247,0.9)', maxWidth: 920, textAlign: 'center', lineHeight: 1.8, fontSize: 'clamp(14px,2.2vw,17px)' }}>
-            {transcript}{interim && <span style={{ color: 'rgba(247,247,247,0.4)' }}> {interim}</span>}
+    <div style={{ position: 'fixed', inset: 0, background: '#060609', overflow: 'hidden' }}>
+      <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0 }} />
+      <div style={{ position: 'absolute', top: 0, left: 0, right: 0, padding: 18, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, textAlign: 'center', pointerEvents: 'none' }}>
+        <motion.h1 initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} style={{ margin: 0, fontSize: 'clamp(26px,5vw,52px)', letterSpacing: '-0.04em', fontWeight: 800, color: '#f7f7f7' }}>
+          Soundbrush
+        </motion.h1>
+        <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ margin: 0, color: 'rgba(247,247,247,0.55)', fontSize: 'clamp(12px,1.6vw,14px)' }}>
+          Let sound paint. Speak, hum, tap mic - it responds live.
+        </motion.p>
+        <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} style={{ display: 'flex', gap: 10, marginTop: 4, pointerEvents: 'auto' }}>
+          <button onClick={listening ? stopMic : startMic} style={btn(listening)}>
+            {listening ? 'Stop mic' : 'Start mic'}
+          </button>
+          <button onClick={() => (pathsRef.current = [])} style={btn(false)}>Clear</button>
+        </motion.div>
+        <AnimatePresence>
+          {error && <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} style={{ color: '#ff6b6b', fontSize: 12 }}>{error}</motion.div>}
+        </AnimatePresence>
+        {listening && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} style={{ marginTop: 6, width: 'min(420px,80vw)', height: 4, borderRadius: 999, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+            <div style={{ width: `${level * 100}%`, height: '100%', background: 'linear-gradient(90deg, rgba(159,201,255,0.8), rgba(255,201,222,0.9))', transition: 'width 80ms linear' }} />
           </motion.div>
         )}
-      </AnimatePresence>
-      <motion.canvas ref={canvasRef} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.28 }} style={{ borderRadius: 16, border: '1px solid rgba(255,255,255,0.08)', boxShadow: '0 60px 160px -80px rgba(159,201,255,0.5), 0 30px 80px -50px rgba(0,0,0,0.95)' }} />
-      {history.length > 0 && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', maxWidth: 1100, justifyContent: 'center' }}>
-          {history.map((h, i) => (
-            <motion.span key={i} initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.04 * i }} style={{ fontSize: 11, color: 'rgba(247,247,247,0.38)', padding: '5px 9px', borderRadius: 999, border: '1px solid rgba(255,255,255,0.05)' }}>
-              {h}
-            </motion.span>
-          ))}
-        </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -336,14 +214,17 @@ export default function App() {
 function btn(disabled: boolean): React.CSSProperties {
   return {
     appearance: 'none',
-    border: '1px solid rgba(255,255,255,0.12)',
-    background: disabled ? 'rgba(255,255,255,0.02)' : 'linear-gradient(180deg, rgba(255,255,255,0.08), transparent)',
+    border: '1px solid rgba(255,255,255,0.14)',
+    background: disabled ? 'rgba(255,255,255,0.02)' : 'linear-gradient(180deg, rgba(255,255,255,0.09), transparent)',
     color: '#f7f7f7',
-    padding: '9px 18px',
+    padding: '8px 16px',
     borderRadius: 999,
     opacity: disabled ? 0.4 : 1,
     cursor: disabled ? 'not-allowed' : 'pointer',
     fontWeight: 600,
+    fontSize: 13,
     letterSpacing: '-0.01em',
+    backdropFilter: 'blur(6px)',
+    WebkitBackdropFilter: 'blur(6px)',
   }
 }
