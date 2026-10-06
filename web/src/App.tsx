@@ -151,8 +151,8 @@ export default function App() {
     <div style={{position:'fixed',inset:0,background:'#030306'}}>
       <canvas ref={cRef}/>
       <div style={{position:'absolute',top:16,left:0,right:0,textAlign:'center',color:'#fff',pointerEvents:'none'}}>
-        <h1 style={{margin:0,fontSize:'clamp(22px,5vw,46px)',letterSpacing:'-.04em',fontWeight:800}}>Soundbrush</h1>
-        <p style={{margin:'4px 0 0',opacity:.6,fontSize:'clamp(11px,1.5vw,12px)'}}>Click Start. Hum, talk, clap — it paints live.</p>
+        <h1 style={{margin:0,fontSize:'clamp(28px,6vw,68px)',letterSpacing:'-.05em',fontWeight:900}}>Soundbrush</h1>
+        <p style={{margin:'6px 0 0',opacity:.75,fontSize:'clamp(12px,2vw,16px)'}}>Let sound paint beautiful art.</p>
         <div style={{marginTop:10,pointerEvents:'auto',display:'flex',gap:10,justifyContent:'center'}}>
           <button onClick={on?stop:start} style={btn}>{on?'Stop':'Start mic'}</button>
           <button onClick={()=>trailsRef.current=[]} style={btn}>Clear</button>
